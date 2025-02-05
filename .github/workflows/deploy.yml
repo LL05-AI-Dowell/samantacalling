@@ -22,16 +22,16 @@ jobs:
 
       - name: Deploy to Server
         env:
-          DEPLOY_PATH: /home/samanatacalling
+          DEPLOY_PATH: /home/samantacalling
           DEPLOY_HOST: 147.93.111.68
           DEPLOY_USER: root
         run: |
           ssh $DEPLOY_USER@$DEPLOY_HOST "bash -s" << 'ENDSSH'
-          # Set deployment path explicitly
-          DEPLOY_PATH=/home/samanatacalling
+          # Set deployment path
+          DEPLOY_PATH=/home/samantacalling
           echo "🚀 Starting deployment to $DEPLOY_PATH..."
 
-          # Verify deployment path exists or create it
+          # Ensure the deployment directory exists
           if [ ! -d "$DEPLOY_PATH" ]; then
             echo "📁 Creating deployment directory..."
             mkdir -p "$DEPLOY_PATH" || { echo "❌ Failed to create directory"; exit 1; }
@@ -40,27 +40,28 @@ jobs:
           # Navigate to deployment directory
           cd "$DEPLOY_PATH" || { echo "❌ Failed to navigate to deployment directory"; exit 1; }
 
-          # Check for existing Git repo or initialize one
+          # Check if it's a git repository
           if [ ! -d ".git" ]; then
             echo "🔄 Initializing Git repository..."
-            git init || { echo "❌ Failed to initialize Git repository"; exit 1; }
-            git remote add origin git@github.com:LL05-AI-Dowell/samantacalling.git || { echo "❌ Failed to add remote"; exit 1; }
+            git init || { echo "❌ Git init failed"; exit 1; }
+            git remote add origin git@github.com:LL05-AI-Dowell/samantacalling.git || { echo "❌ Adding remote failed"; exit 1; }
+          else
+            echo "✅ Git repository already initialized."
           fi
 
-          # Pull latest changes
+          # Pull latest changes without resetting everything
           echo "⬇️ Pulling latest code..."
-          git fetch origin main || { echo "❌ Git fetch failed"; exit 1; }
-          git reset --hard origin/main || { echo "❌ Git reset failed"; exit 1; }
+          git pull origin main --rebase || { echo "❌ Git pull failed"; exit 1; }
 
-          # Stop existing containers
+          # Stop existing containers (if running)
           echo "🛑 Stopping existing containers..."
           docker compose down || true
 
-          # Remove unused Docker resources
+          # Clean up unused Docker resources
           echo "🧹 Cleaning up Docker resources..."
           docker system prune -af || { echo "⚠️ Docker cleanup failed"; exit 1; }
 
-          # Build and deploy with Docker Compose
+          # Build and restart services
           echo "🏗️ Building and deploying containers..."
           docker compose build --no-cache || { echo "❌ Docker build failed"; exit 1; }
           docker compose up -d || { echo "❌ Docker compose up failed"; exit 1; }
@@ -79,7 +80,7 @@ jobs:
       - name: Verify Deployment
         run: |
           echo "⏳ Waiting for services to start..."
-          sleep 30  # Give services time to start
+          sleep 30  # Allow time for services to start
           
           # Check if services are responding
           echo "🔍 Verifying service availability..."
