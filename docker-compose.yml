@@ -47,6 +47,11 @@ services:
       - /etc/letsencrypt/live/samantacalling.uxlivinglab.online/fullchain.pem:/etc/letsencrypt/live/samantacalling.uxlivinglab.online/fullchain.pem:ro
       - /etc/letsencrypt/live/samantacalling.uxlivinglab.online/privkey.pem:/etc/letsencrypt/live/samantacalling.uxlivinglab.online/privkey.pem:ro
     restart: always
+    networks:
+      - app-network
+    depends_on:
+      - client
+      - server
 
 networks:
   app-network:
