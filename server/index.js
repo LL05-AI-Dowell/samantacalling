@@ -4,6 +4,8 @@ import { WebSocketServer } from "ws";
 import dotenv from 'dotenv';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { v4 as uuidv4 } from 'uuid';
+import QRCode from 'qrcode';
 
 dotenv.config();
 
@@ -14,11 +16,11 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser())
 
-let manager = null;
-let client = null;
-let clients = [];
+const clients = new Map();
+let activeConnections = new Map();
 
-// Helper function to safely send messages
+
+
 const safeSend = (ws, message) => {
   try {
     if (ws && ws.readyState === ws.OPEN) {
@@ -29,15 +31,33 @@ const safeSend = (ws, message) => {
   }
 };
 
-// Helper to check connection status
-const isConnectionAlive = (ws) => {
-  return ws && ws.readyState === ws.OPEN;
-};
+app.post('/api/generate-qr', async (req, res) => {
+  try {
+    const { clientId } = req.body;
+    if (!clientId) {
+      return res.status(400).json({ error: 'Client ID is required' });
+    }
+
+    const connectionId = uuidv4();
+    const callUrl = `${process.env.FRONTEND_URL}/call/${connectionId}/${clientId}`;
+    
+    const qrCode = await QRCode.toDataURL(callUrl);
+    
+    res.json({
+      qrCode,
+      connectionId,
+      callUrl
+    });
+  } catch (error) {
+    console.error('Error generating QR code:', error);
+    res.status(500).json({ error: 'Failed to generate QR code' });
+  }
+});
+
 
 wss.on("connection", (ws) => {
   console.log("New client connected");
 
-  // Ping-pong to detect stale connections
   ws.isAlive = true;
   ws.on('pong', () => {
     ws.isAlive = true;
@@ -46,46 +66,59 @@ wss.on("connection", (ws) => {
   ws.on("message", async (event) => {
     try {
       const message = JSON.parse(event);
-
+      console.log(message.type);
+      
       switch (message.type) {
         case "connection:admin":
-          if (!manager) {
-            manager = ws;
-            console.log("Admin connected");
+          const { clientId } = message;
+          console.log(clientId);
+          
+          const clientExist = clients.get(clientId);
+          console.log(clientExist);
+          
+          if(!clientExist) {
+            clients.set(String(clientId), ws);
+
           }
           break;
 
         case "connection:client":
-          if (!client) {
-            client = ws;
-            safeSend(client, { type: 'call:ready' });
-            console.log("Primary client connected");
+          const { targetClientId, connectionId } = message;
+          const targetClient = clients.get(String(targetClientId));
+
+          if (targetClient) {
+            activeConnections.set(connectionId, {
+              clientId: targetClientId,
+              userWs: ws
+            });
+            
+            safeSend(targetClient, {
+              type: 'call:incoming',
+              connectionId
+            });
+            
+            safeSend(ws, { type: 'call:waiting' });
           } else {
-            clients.push(ws);
-            console.log("Additional client connected");
+            safeSend(ws, { 
+              type: 'error',
+              message: 'Client not available'
+            });
           }
           break;
-
+        case "call:accepted":
+        case "call:terminated":
         case "offer":
-          if (isConnectionAlive(manager)) {
-            safeSend(manager, message);
-          }
-          break;
-
         case "answer":
-          if (isConnectionAlive(client)) {
-            safeSend(client, message);
-          }
-          break;
-
         case "candidate":
-          if (ws === client && isConnectionAlive(manager)) {
-            safeSend(manager, message);
-          } else if (ws === manager && isConnectionAlive(client)) {
-            safeSend(client, message);
+          
+          const connection = activeConnections.get(message.connectionId);
+          
+          if (connection) {
+            const { clientId, userWs } = connection;
+            const targetWs = ws === userWs ? clients.get(clientId) : userWs;
+            safeSend(targetWs, message);
           }
           break;
-
         default:
           console.log("Unknown message type:", message.type);
       }
@@ -95,20 +128,18 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    console.log("Client disconnected");
+    for (const [clientId, clientWs] of clients.entries()) {
+      if (clientWs === ws) {
+        clients.delete(clientId);
+        break;
+      }
+    }
+    for (const [connectionId, conn] of activeConnections.entries()) {
+      if (conn.userWs === ws || clients.get(conn.clientId) === ws) {
+        activeConnections.delete(connectionId);
+      }
+    }
     
-    if (ws === manager) {
-      manager = null;
-      safeSend(client, { type: "disconnect" });
-    }
-
-    if (ws === client) {
-      client = null;
-      safeSend(manager, { type: 'disconnect' });
-    }
-
-    // Clean up disconnected clients
-    clients = clients.filter(c => c !== ws && c.readyState === c.OPEN);
   });
 
   ws.on("error", (error) => {
