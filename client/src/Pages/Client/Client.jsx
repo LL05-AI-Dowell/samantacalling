@@ -20,6 +20,7 @@ function Client() {
   const [localStream, setLocalStream] = useState(null);
   const [userName, setUserName] = useState("");
   const [isNameEntered, setIsNameEntered] = useState(false);
+  const [connectionId, setConnectionId] = useState(null)
 
   useEffect(() => {
     if (!peerConnection || !socket) return;
@@ -27,7 +28,7 @@ function Client() {
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         socket.send(
-          JSON.stringify({ type: "candidate", candidate: event.candidate })
+          JSON.stringify({ type: "candidate", candidate: event.candidate, connectionId: connectionId })
         );
       }
     };
@@ -39,7 +40,14 @@ function Client() {
       remoteAudio.autoplay = true;
       document.body.appendChild(remoteAudio);
       setRemoteAudioElement(remoteAudio);
-
+      remoteAudio.onplay = () => {
+        console.log("Remote audio is playing");
+      };
+  
+      remoteAudio.onerror = (e) => {
+        console.error("Error playing remote audio:", e);
+      };
+  
       setIsConnecting(false);
       setMessage("Connected to support agent");
 
@@ -65,15 +73,15 @@ function Client() {
         endCall("There is no admin available right now. Please try again later.");
       }
 
-      if (data.type === "call:ready") {
+      if (data.type === "call:accepted") {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-              sampleRate: 160000,
-              channelCount: 2,
+              sampleRate: 44100,
+              channelCount: 1,
             },
           });
           
@@ -87,7 +95,7 @@ function Client() {
           await peerConnection.setLocalDescription(
             new RTCSessionDescription(offer)
           );
-          socket.send(JSON.stringify({ type: "offer", offer }));
+          socket.send(JSON.stringify({ type: "offer", offer, connectionId: data.connectionId }));
         } catch (err) {
           console.error("Error accessing microphone:", err);
           endCall("Error accessing microphone. Please check your permissions.");
@@ -171,8 +179,11 @@ function Client() {
     socket.send(JSON.stringify({ 
       type: "connection:client",
       timestamp: new Date().toISOString(),
-      userName: userName.trim()
+      userName: userName.trim(),
+      targetClientId: "2",
+      connectionId: "a5463ead-7684-45e8-9c6b-fad9677db23f"
     }));
+    setConnectionId("2")
   }
 
   function endCall(customMessage = "") {

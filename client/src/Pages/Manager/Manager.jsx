@@ -13,22 +13,31 @@ function Manager() {
   const [remoteAudioElement, setRemoteAudioElement] = useState(null);
   const [clientName, setClientName] = useState("");
   const [clientStatus, setClientStatus] = useState("waiting");
+  const [connectionId, setConnectionId] = useState(null)
 
   useEffect(() => {
     if (!socket || !peerConnection) return;
 
     peerConnection.ontrack = (event) => {
-      console.log("Received remote track:", event.streams[0]);
+      console.log("Received remote track:", event.streams[0], event.track.kind);
       const remoteAudio = document.createElement("audio");
       remoteAudio.srcObject = event.streams[0];
       remoteAudio.autoplay = true;
       document.body.appendChild(remoteAudio);
+      remoteAudio.onplay = () => {
+        console.log("Remote audio is playing");
+      };
+  
+      remoteAudio.onerror = (e) => {
+        console.error("Error playing remote audio:", e);
+      };
+  
       setRemoteAudioElement(remoteAudio);
     };
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        socket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+        socket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, connectionId: connectionId }));
       }
     };
 
@@ -43,17 +52,18 @@ function Manager() {
 
     // Manager.js (continued)
     socket.onopen = () => {
-      socket.send(JSON.stringify({ type: 'connection:admin' }));
+      socket.send(JSON.stringify({ type: 'connection:admin', clientId: "2" }));
     };
 
     socket.onmessage = async (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.type === "connection:client") {
+      if (data.type === "call:incoming") {
         setIncomingCall(true);
         setClientName(data.userName || "Anonymous User");
         setClientStatus("connecting");
-        socket.send(JSON.stringify({ type: "call:ready" }));
+        setConnectionId(data.connectionId)
+        socket.send(JSON.stringify({ type: "call:accepted", connectionId: data.connectionId }));
       }
 
       if (data.type === "offer") {
@@ -63,8 +73,8 @@ function Manager() {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-              sampleRate: 160000,
-              channelCount: 2
+              sampleRate: 44100,
+              channelCount: 1
             } 
           });
 
@@ -73,7 +83,7 @@ function Manager() {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
           const answer = await peerConnection.createAnswer();
           await peerConnection.setLocalDescription(new RTCSessionDescription(answer));
-          socket.send(JSON.stringify({ type: "answer", answer }));
+          socket.send(JSON.stringify({ type: "answer", answer, connectionId: data.connectionId }));
 
           setStream(localStream);
           setIsCallActive(true);
