@@ -1,4 +1,3 @@
-// Client.js
 import { useEffect, useState } from "react";
 import { useAppContext } from "../../context/ContextProvider";
 import {
@@ -8,46 +7,87 @@ import {
   User,
   ChevronRight,
 } from "lucide-react";
+import { useParams } from "react-router-dom";
 
 function Client() {
+  const { connection_Id, clientId } = useParams();
   const { socket, peerConnection } = useAppContext();
   const [message, setMessage] = useState("");
   const [isCalled, setIsCalled] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [intervalId, setIntervalId] = useState(null);
-  const [remoteAudioElement, setRemoteAudioElement] = useState(null);
+  const [remoteAudio, setRemoteAudio] = useState(null);
   const [localStream, setLocalStream] = useState(null);
   const [userName, setUserName] = useState("");
   const [isNameEntered, setIsNameEntered] = useState(false);
-  const [connectionId, setConnectionId] = useState(null)
+  const [connectionId, setConnectionId] = useState(connection_Id);
+  const [audioContext, setAudioContext] = useState(null);
+
+
+  // Initialize audio element on component mount
+  useEffect(() => {
+    const audio = new Audio();
+    audio.autoplay = true;
+    setRemoteAudio(audio);
+    
+    // Create AudioContext for better audio processing
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    setAudioContext(context);
+    
+    return () => {
+      if (audio) {
+        audio.srcObject = null;
+        audio.pause();
+      }
+      if (context && context.state !== 'closed') {
+        context.close();
+      }
+    };
+  }, []);
 
   useEffect(() => {
-    if (!peerConnection || !socket) return;
+    if (!peerConnection || !socket || !remoteAudio) return;
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         socket.send(
-          JSON.stringify({ type: "candidate", candidate: event.candidate, connectionId: connectionId })
+          JSON.stringify({ 
+            type: "candidate", 
+            candidate: event.candidate, 
+            connectionId: connectionId 
+          })
         );
       }
     };
 
     peerConnection.ontrack = (event) => {
       console.log("Received remote track:", event.streams[0]);
-      const remoteAudio = document.createElement("audio");
+      
+      // Directly connect the stream to the audio element
       remoteAudio.srcObject = event.streams[0];
-      remoteAudio.autoplay = true;
-      document.body.appendChild(remoteAudio);
-      setRemoteAudioElement(remoteAudio);
-      remoteAudio.onplay = () => {
-        console.log("Remote audio is playing");
-      };
-  
-      remoteAudio.onerror = (e) => {
-        console.error("Error playing remote audio:", e);
-      };
-  
+      
+      // Ensure the audio is unmuted and playing
+      remoteAudio.muted = false;
+      remoteAudio.volume = 1.0;
+      
+      // Force play (might help with autoplay issues)
+      const playPromise = remoteAudio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            console.log("Remote audio is playing successfully");
+          })
+          .catch(error => {
+            console.error("Error playing remote audio:", error);
+            // Try again with user interaction
+            setMessage("Click anywhere to enable audio");
+            document.body.addEventListener('click', () => {
+              remoteAudio.play().catch(e => console.error("Still can't play audio:", e));
+            }, { once: true });
+          });
+      }
+      
       setIsConnecting(false);
       setMessage("Connected to support agent");
 
@@ -66,36 +106,58 @@ function Client() {
       }
     };
 
+    // Log ICE connection state changes for debugging
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log("ICE connection state:", peerConnection.iceConnectionState);
+    };
+    
     socket.onmessage = async (event) => {
       const data = JSON.parse(event.data);
+      console.log("Received message:", data.type);
 
       if (data.type === "manager:inactive") {
         endCall("There is no admin available right now. Please try again later.");
       }
 
       if (data.type === "call:accepted") {
+        setConnectionId(data.connectionId);
+        
         try {
+          // Request user media with explicit constraints for high quality audio
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-              sampleRate: 44100,
+              sampleRate: 48000,
               channelCount: 1,
             },
+            video: false
           });
           
           setLocalStream(stream);
+          
+          // Add all tracks from the stream to the peer connection
+          stream.getTracks().forEach((track) => {
+            console.log("Adding local track to peer connection:", track.kind);
+            peerConnection.addTrack(track, stream);
+          });
 
-          stream.getTracks().forEach((track) => 
-            peerConnection.addTrack(track, stream)
-          );
-
-          const offer = await peerConnection.createOffer();
-          await peerConnection.setLocalDescription(
-            new RTCSessionDescription(offer)
-          );
-          socket.send(JSON.stringify({ type: "offer", offer, connectionId: data.connectionId }));
+          // Create and send the offer
+          const offer = await peerConnection.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: false
+          });
+          
+          await peerConnection.setLocalDescription(offer);
+          
+          socket.send(JSON.stringify({ 
+            type: "offer", 
+            offer, 
+            connectionId: data.connectionId 
+          }));
+          
+          console.log("Offer created and sent");
         } catch (err) {
           console.error("Error accessing microphone:", err);
           endCall("Error accessing microphone. Please check your permissions.");
@@ -103,15 +165,26 @@ function Client() {
       }
 
       if (data.type === "answer") {
-        await peerConnection.setRemoteDescription(
-          new RTCSessionDescription(data.answer)
-        );
+        console.log("Received answer");
+        try {
+          await peerConnection.setRemoteDescription(
+            new RTCSessionDescription(data.answer)
+          );
+          console.log("Remote description set successfully");
+        } catch (err) {
+          console.error("Error setting remote description:", err);
+        }
       }
 
       if (data.type === "candidate") {
-        await peerConnection.addIceCandidate(
-          new RTCIceCandidate(data.candidate)
-        );
+        console.log("Received ICE candidate");
+        try {
+          await peerConnection.addIceCandidate(
+            new RTCIceCandidate(data.candidate)
+          );
+        } catch (err) {
+          console.error("Error adding ICE candidate:", err);
+        }
       }
 
       if (data.type === "disconnection:admin" || data.type === "call:terminated") {
@@ -122,7 +195,7 @@ function Client() {
     return () => {
       cleanupCall();
     };
-  }, [peerConnection, socket]);
+  }, [peerConnection, socket, remoteAudio]);
 
   const cleanupCall = () => {
     if (intervalId) {
@@ -131,7 +204,10 @@ function Client() {
     }
 
     if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+      localStream.getTracks().forEach(track => {
+        track.stop();
+        console.log("Stopped track:", track.kind);
+      });
       setLocalStream(null);
     }
 
@@ -150,21 +226,15 @@ function Client() {
         }
       });
 
-      peerConnection.getSenders().forEach(sender => {
-        peerConnection.removeTrack(sender);
-      });
-
       peerConnection.onicecandidate = null;
       peerConnection.ontrack = null;
       peerConnection.onconnectionstatechange = null;
-
-      peerConnection.close();
+      peerConnection.oniceconnectionstatechange = null;
     }
 
-    if (remoteAudioElement) {
-      remoteAudioElement.srcObject = null;
-      remoteAudioElement.remove();
-      setRemoteAudioElement(null);
+    if (remoteAudio) {
+      remoteAudio.srcObject = null;
+      remoteAudio.pause();
     }
   };
 
@@ -173,24 +243,27 @@ function Client() {
       setMessage("Please enter your name first");
       return;
     }
+  
+    
     setIsConnecting(true);
     setIsCalled(true);
     setMessage("Connecting you to the admin...");
+    
     socket.send(JSON.stringify({ 
       type: "connection:client",
       timestamp: new Date().toISOString(),
       userName: userName.trim(),
-      targetClientId: "2",
-      connectionId: "a5463ead-7684-45e8-9c6b-fad9677db23f"
+      targetClientId: clientId, // Make sure this matches your admin's clientId
+      connectionId: connectionId
     }));
-    setConnectionId("2")
   }
 
   function endCall(customMessage = "") {
     socket.send(JSON.stringify({ 
       type: "call:terminated",
       timestamp: new Date().toISOString(),
-      reason: "user_initiated"
+      reason: "user_initiated",
+      connectionId: connectionId
     }));
     
     cleanupCall();
@@ -198,6 +271,7 @@ function Client() {
     setIsConnecting(false);
     setMessage(customMessage || "");
     setCallDuration(0);
+    setConnectionId(null);
   }
 
   const formatTime = (seconds) => {

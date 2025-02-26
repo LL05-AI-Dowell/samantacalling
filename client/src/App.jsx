@@ -13,7 +13,7 @@ function App() {
       <Routes>
         <Route path='/' element={<Client/>} />
         <Route path='/admin' element={<Manager/>} />
-        <Route path='/call/:connectionId/:clientId' element={<CallPage/>} />
+        <Route path='/call/:connection_Id/:clientId' element={<CallPage/>} />
       </Routes>
     </AppProvider>
     </>
