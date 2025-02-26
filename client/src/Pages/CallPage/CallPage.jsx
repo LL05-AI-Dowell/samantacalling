@@ -63,8 +63,6 @@ const CallPage = () => {
       switch (message.type) {
         case 'call:waiting':
           setCallStatus('connecting');
-          // Start local media after we're connected to signaling
-          startLocalMedia();
           break;
           
         case 'offer':
@@ -80,7 +78,7 @@ const CallPage = () => {
           break;
           
         case 'call:accepted':
-          setCallStatus('ongoing');
+          await startLocalMedia()
           break;
           
         case 'call:terminated':
@@ -127,8 +125,11 @@ const CallPage = () => {
   const startLocalMedia = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: true, 
-        video: true 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
       });
       
       setLocalStream(stream);
@@ -157,20 +158,36 @@ const CallPage = () => {
     const pc = new RTCPeerConnection(configuration);
     peerConnectionRef.current = pc;
     
-    // Add local tracks to peer connection
     stream.getTracks().forEach(track => {
       pc.addTrack(track, stream);
     });
-    
-    // Handle incoming remote stream
+
     pc.ontrack = (event) => {
-      setRemoteStream(event.streams[0]);
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+  
+      const audioTrack = event.streams[0].getAudioTracks()[0];
+      if (!audioTrack) {
+          console.error("🚨 No audio track received!");
+          return;
       }
-    };
-    
-    // Handle ICE candidates
+  
+      
+      // Ensure audio is enabled
+      audioTrack.enabled = true;
+      const remoteAudio = document.createElement("audio");
+      remoteAudio.srcObject = event.streams[0];
+      remoteAudio.autoplay = true;
+      remoteAudio.controls = true;
+      remoteAudio.muted = false;
+      remoteAudio.style.display = "none"; 
+      document.body.appendChild(remoteAudio);
+  
+      remoteAudio.play().catch(e => {
+          console.error("❌ Autoplay blocked! User interaction required:", e);
+          remoteAudio.style.display = "block";
+      });
+  
+  };
+
     pc.onicecandidate = (event) => {
       if (event.candidate && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         const message = {
@@ -181,6 +198,7 @@ const CallPage = () => {
         wsRef.current.send(JSON.stringify(message));
       }
     };
+
     
     pc.oniceconnectionstatechange = () => {
       console.log('ICE connection state:', pc.iceConnectionState);
@@ -191,7 +209,6 @@ const CallPage = () => {
       }
     };
     
-    // Create and send offer
     createOffer(pc);
   };
   
@@ -204,7 +221,7 @@ const CallPage = () => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         const message = {
           type: 'offer',
-          sdp: pc.localDescription,
+          sdp: offer,
           connectionId
         };
         
@@ -219,40 +236,11 @@ const CallPage = () => {
     }
   };
   
-  // Handle incoming WebRTC offer
-  const handleOffer = async (message) => {
-    try {
-      if (!peerConnectionRef.current) {
-        await startLocalMedia();
-      }
-      
-      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.sdp));
-      const answer = await peerConnectionRef.current.createAnswer();
-      await peerConnectionRef.current.setLocalDescription(answer);
-      
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        const answerMessage = {
-          type: 'answer',
-          sdp: peerConnectionRef.current.localDescription,
-          connectionId
-        };
-        
-        wsRef.current.send(JSON.stringify(answerMessage));
-      } else {
-        throw new Error("WebSocket not connected");
-      }
-    } catch (error) {
-      console.error('Error handling offer:', error);
-      setError('Failed to process call offer. Please try again.');
-      setCallStatus('ended');
-    }
-  };
-  
   // Handle WebRTC answer
   const handleAnswer = async (message) => {
     try {
       if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.sdp));
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.answer));
       }
     } catch (error) {
       console.error('Error handling answer:', error);

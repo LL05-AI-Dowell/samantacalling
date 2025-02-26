@@ -13,6 +13,7 @@ function Manager() {
   const [clientName, setClientName] = useState("");
   const [clientStatus, setClientStatus] = useState("waiting");
   const [connectionId, setConnectionId] = useState(null);
+  const pendingCandidates = [];
   const [adminId, setAdminId] = useState(() => {
     const savedId = localStorage.getItem('adminId');
     if (savedId) return savedId;
@@ -25,33 +26,33 @@ function Manager() {
   useEffect(() => {
     if (!socket || !peerConnection) return;
 
-    // Set up audio handling
     peerConnection.ontrack = (event) => {
-      console.log("Received remote track:", event.streams[0]);
-      
-      // Remove existing audio element if it exists
-      if (remoteAudioElement) {
-        remoteAudioElement.srcObject = null;
-        remoteAudioElement.remove();
+  
+      const audioTrack = event.streams[0].getAudioTracks()[0];
+      if (!audioTrack) {
+          console.error("🚨 No audio track received!");
+          return;
       }
+
       
-      // Create new audio element
+      // Ensure audio is enabled
+      audioTrack.enabled = true;
       const remoteAudio = document.createElement("audio");
       remoteAudio.srcObject = event.streams[0];
       remoteAudio.autoplay = true;
-      remoteAudio.controls = true; // Add controls for debugging
-      remoteAudio.style.display = "none"; // Hide it but keep it accessible
+      remoteAudio.controls = true;
+      remoteAudio.muted = false;
+      remoteAudio.style.display = "none"; 
       document.body.appendChild(remoteAudio);
-      
-      // Try playing it immediately
+  
       remoteAudio.play().catch(e => {
-        console.error("Error auto-playing audio:", e);
-        // Make visible if autoplay fails
-        remoteAudio.style.display = "block";
+          console.error("❌ Autoplay blocked! User interaction required:", e);
+          remoteAudio.style.display = "block";
       });
-      
+  
       setRemoteAudioElement(remoteAudio);
-    };
+  };
+  
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
@@ -63,30 +64,8 @@ function Manager() {
       }
     };
 
-    peerConnection.onconnectionstatechange = () => {
-      console.log("Connection state changed:", peerConnection.connectionState);
-      if (peerConnection.connectionState === 'disconnected' || 
-          peerConnection.connectionState === 'failed' ||
-          peerConnection.connectionState === 'closed') {
-        handleConnectionEnd("Call disconnected");
-      }
-    };
-
-    // Add more event listeners for debugging
-    peerConnection.onsignalingstatechange = () => {
-      console.log("Signaling state changed:", peerConnection.signalingState);
-    };
-
-    peerConnection.onicegatheringstatechange = () => {
-      console.log("ICE gathering state changed:", peerConnection.iceGatheringState);
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log("ICE connection state changed:", peerConnection.iceConnectionState);
-    };
 
     socket.onopen = () => {
-      // Include the clientId in the connection:admin message
       socket.send(JSON.stringify({ 
         type: 'connection:admin',
         clientId: adminId
@@ -127,12 +106,17 @@ function Manager() {
 
           // Add all tracks from local stream
           localStream.getTracks().forEach(track => {
-            console.log("Adding track to connection:", track.kind, track.id);
+            console.log("Adding track to connection:", track.kind, track.id, track.muted, track.enabled, track.readyState);
             peerConnection.addTrack(track, localStream);
           });
 
           console.log("Setting remote description");
-          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+          peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+          .then(() => {
+              pendingCandidates.forEach(candidate => peerConnection.addIceCandidate(new RTCIceCandidate(candidate)));
+              pendingCandidates.length = 0; // Clear the array
+          })
+          .catch(error => console.error("Error setting remote description:", error));
           
           console.log("Creating answer");
           const answer = await peerConnection.createAnswer();
@@ -170,7 +154,13 @@ function Manager() {
       if (data.type === 'candidate' && data.candidate) {
         try {
           console.log("Adding ICE candidate");
-          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+          if (peerConnection.remoteDescription) {
+              peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
+                  .catch(error => console.error("Error adding ICE candidate:", error));
+          } else {
+              console.warn("Remote description not set yet. Storing candidate.");
+              pendingCandidates.push(data.candidate);
+          }
         } catch (e) {
           console.error("Error adding ICE candidate:", e);
         }
@@ -203,42 +193,6 @@ function Manager() {
       setStream(null);
     }
 
-    if (peerConnection) {
-      console.log("Cleaning up peer connection...");
-      
-      if (peerConnection.getTransceivers) {
-        peerConnection.getTransceivers().forEach(transceiver => {
-          if (transceiver.stop) {
-            transceiver.stop();
-          }
-        });
-      }
-
-      // Remove tracks and close connection
-      peerConnection.getSenders().forEach(sender => {
-        if (sender.track) {
-          sender.track.stop();
-        }
-      });
-
-      peerConnection.close();
-      
-      // Reset event handlers
-      peerConnection.onicecandidate = null;
-      peerConnection.ontrack = null;
-      peerConnection.onconnectionstatechange = null;
-      peerConnection.onsignalingstatechange = null;
-      peerConnection.onicegatheringstatechange = null;
-      peerConnection.oniceconnectionstatechange = null;
-    }
-
-    if (remoteAudioElement) {
-      console.log("Removing remote audio element");
-      remoteAudioElement.pause();
-      remoteAudioElement.srcObject = null;
-      remoteAudioElement.remove();
-      setRemoteAudioElement(null);
-    }
   };
 
   const handleConnectionEnd = (reason = "") => {
