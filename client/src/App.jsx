@@ -3,6 +3,7 @@ import './App.css'
 import Client from './Pages/Client/Client';
 import Manager from './Pages/Manager/Manager';
 import { AppProvider } from './context/ContextProvider';
+import CallPage from './Pages/CallPage/CallPage';
 
 function App() {
 
@@ -12,6 +13,7 @@ function App() {
       <Routes>
         <Route path='/' element={<Client/>} />
         <Route path='/admin' element={<Manager/>} />
+        <Route path='/call/:connectionId/:clientId' element={<CallPage/>} />
       </Routes>
     </AppProvider>
     </>
