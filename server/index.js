@@ -2,10 +2,15 @@ import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
 import dotenv from 'dotenv';
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
 import QRCode from 'qrcode';
+import User from "./model/User.js";
+import connectDB from "./service/db.js";
+import imagekit from "./service/imagekit.js";
 
 dotenv.config();
 
@@ -19,7 +24,7 @@ app.use(cookieParser())
 const clients = new Map();
 let activeConnections = new Map();
 
-
+connectDB()
 
 const safeSend = (ws, message) => {
   try {
@@ -31,26 +36,75 @@ const safeSend = (ws, message) => {
   }
 };
 
-app.post('/api/generate-qr', async (req, res) => {
+app.post('/api/login', async (req, res) => {
   try {
-    const { clientId } = req.body;
-    if (!clientId) {
-      return res.status(400).json({ error: 'Client ID is required' });
+    let { username, password } = req.body;
+
+    if(!username || !password) {
+      return res.status(400).json({
+        message: "Username and Password is required."
+      })
     }
 
+    let user = await User.findOne({ username });
+
+    if (user) {
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      const accessToken = jwt.sign(
+        { userId: user._id, username: user.username },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+      
+      return res.json({
+        username,
+        accessToken,
+        qrCodeUrl: user.qrCodeUrl
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const clientId = uuidv4();
     const connectionId = uuidv4();
     const callUrl = `${process.env.FRONTEND_URL}/call/${connectionId}/${clientId}`;
-    
-    const qrCode = await QRCode.toDataURL(callUrl);
-    
-    res.json({
-      qrCode,
-      connectionId,
-      callUrl
+    const qrCodeDataUrl = await QRCode.toDataURL(callUrl);
+
+    const base64Data = qrCodeDataUrl.replace(/^data:image\/png;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    const uploadResponse = await imagekit.upload({
+      file: buffer,
+      fileName: `qr_${username}.png`
     });
+
+    user = new User({
+      username,
+      password: hashedPassword,
+      clientId,
+      qrCodeUrl: uploadResponse.url
+    });
+
+    await user.save();
+
+    const accessToken = jwt.sign(
+      { userId: user._id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      username,
+      accessToken,
+      qrCodeUrl: uploadResponse.url
+    });
+
   } catch (error) {
-    console.error('Error generating QR code:', error);
-    res.status(500).json({ error: 'Failed to generate QR code' });
+    console.error("Error in login:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
