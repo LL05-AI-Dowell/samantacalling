@@ -36,7 +36,7 @@ const safeSend = (ws, message) => {
   }
 };
 
-app.post('/api/login', async (req, res) => {
+app.post('/login', async (req, res) => {
   try {
     let { username, password } = req.body;
 
@@ -61,6 +61,7 @@ app.post('/api/login', async (req, res) => {
       );
       
       return res.json({
+        userId: user._id,
         username,
         accessToken,
         qrCodeUrl: user.qrCodeUrl
@@ -99,7 +100,8 @@ app.post('/api/login', async (req, res) => {
     res.json({
       username,
       accessToken,
-      qrCodeUrl: uploadResponse.url
+      qrCodeUrl: uploadResponse.url,
+      userId: user._id
     });
 
   } catch (error) {
