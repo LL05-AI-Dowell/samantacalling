@@ -61,7 +61,7 @@ app.post('/login', async (req, res) => {
       );
       
       return res.json({
-        userId: user._id,
+        userId: user.clientId,
         username,
         accessToken,
         qrCodeUrl: user.qrCodeUrl
@@ -86,7 +86,7 @@ app.post('/login', async (req, res) => {
       username,
       password: hashedPassword,
       clientId,
-      qrCodeUrl: uploadResponse.url
+      qrCodeUrl: uploadResponse.url,
     });
 
     await user.save();
@@ -101,7 +101,8 @@ app.post('/login', async (req, res) => {
       username,
       accessToken,
       qrCodeUrl: uploadResponse.url,
-      userId: user._id
+      userId: clientId,
+      callUrl
     });
 
   } catch (error) {
