@@ -239,6 +239,8 @@ const CallPage = () => {
   // Handle WebRTC answer
   const handleAnswer = async (message) => {
     try {
+      console.log(message, "sdp");
+      
       if (peerConnectionRef.current) {
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.sdp));
       }
