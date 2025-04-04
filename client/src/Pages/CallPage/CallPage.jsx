@@ -242,7 +242,8 @@ const CallPage = () => {
       console.log(message, "sdp");
       
       if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.sdp));
+        const { type, sdp } = answer;
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
       }
     } catch (error) {
       console.error('Error handling answer:', error);
