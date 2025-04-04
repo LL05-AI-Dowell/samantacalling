@@ -240,7 +240,7 @@ const CallPage = () => {
   const handleAnswer = async (message) => {
     try {
       if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.answer));
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.sdp));
       }
     } catch (error) {
       console.error('Error handling answer:', error);
